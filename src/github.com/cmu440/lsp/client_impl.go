@@ -143,7 +143,10 @@ func (c *client) Write(payload []byte) error {
 }
 
 func (c *client) Close() error {
-	return errors.New("not yet implemented")
+	request := newCloseRequest()
+	c.closeReqChan <- request
+	<-request.response
+	return nil
 }
 
 /*
@@ -174,7 +177,22 @@ func (c *client) handleWriteRequest(request *writeRequest) {
 		// add data message to sentMsgBuf
 		c.sentMsgBuf.PushBack(dataMsg)
 	}
+}
 
+func (c *client) handleCloseRequest(request *closeRequest) {
+	// first check if connnection is lost or sentBuf is empty
+	if c.isLost || c.sentMsgBuf.Len() == 0 {
+		//if not lost, still needs to close ntwk and epoch handler
+		if !c.isLost {
+			close(c.shutdownEpochChan)
+			close(c.shutdownNtwkChan)
+		}
+		close(c.shutdownMasterChan)
+		request.response <- struct{}{}
+	} else {
+		// push into queue, waiting to be processed
+		c.closeRequestQueue.PushBack(request)
+	}
 }
 
 // handle newly arrived messages
@@ -218,7 +236,9 @@ func (c *client) handleEpochEvent() {
 		close(c.shutdownNtwkChan)  // stop reading from ntwk
 		c.epochChan = nil
 		// TODO: tricky here, check again!
-		c.notifyClose()
+		if c.closeRequestQueue.Len() > 0 {
+			c.notifyClose()
+		}
 		return
 	}
 
@@ -229,13 +249,11 @@ func (c *client) handleEpochEvent() {
 func (c *client) notifyClose() {
 	// may be called when
 	// 1. timeout and needs close
-	// 2. needs close and last msg was read by user
-	// 3. needs cloes and no msg needs to be read at that moment
-	if c.closeRequestQueue.Len() > 0 {
-		req := c.closeRequestQueue.Remove(c.closeRequestQueue.Front())
-		req.response <- struct{}{}
-		close(c.shutdownMasterChan)
-	}
+	// 2. needs close and the last unacked/unsent msg was acked
+	// 3. needs cloes and all msgs has been sent at that moment
+	close(c.shutdownMasterChan)
+	req := c.closeRequestQueue.Remove(c.closeRequestQueue.Front())
+	req.response <- struct{}{}
 }
 
 /*
@@ -252,7 +270,7 @@ func (c *client) masterEventHandler() {
 		case request := <-c.writeReqChan:
 			c.handleWriteRequest(request)
 		case request := <-c.closeReqChan:
-			// TODO: handle close request
+			c.handleCloseRequest(request)
 		case msg := <-c.msgArriveChan:
 			c.handleNewMsg(msg)
 		case <-c.epochChan:
