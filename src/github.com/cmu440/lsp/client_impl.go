@@ -36,9 +36,9 @@ type client struct {
 	closeRequestQueue *list.List // close requests waiting to be responded
 
 	// channels
-	connAckChannel chan struct{}       // notify NewClient conn ack is received
-	readReqChan    <-chan readRequest  // communicate with Read
-	closeReqChan   <-chan closeRequest // communicate with Close
+	connAckChannel chan struct{}        // notify NewClient conn ack is received
+	readReqChan    <-chan *readRequest  // communicate with Read
+	closeReqChan   <-chan *closeRequest // communicate with Close
 }
 
 // NewClient creates, initiates, and returns a new client. This function
