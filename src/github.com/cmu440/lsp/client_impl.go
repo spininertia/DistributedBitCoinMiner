@@ -9,6 +9,11 @@ import (
 	"github.com/cmu440/lspnet"
 	"log"
 	"os"
+	"time"
+)
+
+const (
+	Bufsize = 1500
 )
 
 var LOGE = log.new(os.Stderr, "ERROR", log.Lmicroseconds|log.Lshortfile)
@@ -42,12 +47,14 @@ type client struct {
 	closeRequestQueue *list.List // close requests waiting to be responded
 
 	// channels
-	connAckChan   chan struct{}        // notify NewClient conn ack is received
-	readReqChan   <-chan *readRequest  // communicate with Read
-	closeReqChan  <-chan *closeRequest // communicate with Close
-	writeReqChan  <-chan []byte        //communicate with Write
-	msgArriveChan <-chan *Message      //new msg arrived
-	shutdown      chan struct{}        // to shutdown all goroutines
+	connAckChan       chan struct{}        // notify NewClient conn ack is received
+	readReqChan       <-chan *readRequest  // communicate with Read
+	closeReqChan      <-chan *closeRequest // communicate with Close
+	writeReqChan      <-chan []byte        //communicate with Write
+	msgArriveChan     <-chan *Message      //new msg arrived
+	epochChan         <-chan struct{}      // receive epoch notification
+	shutdownNtwkChan  chan struct{}        // to shutdown ntwk handler
+	shutdownEpochChan chan struct{}        // to shutdown epoch handler
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -82,7 +89,9 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		closeReqChan:      make(<-chan *closeRequest),
 		writeReqChan:      make(chan []byte),
 		msgArriveChan:     make(chan *Message),
-		shutdown:          make(chan struct{}),
+		epochChan:         make(chan struct{}),
+		shutdownNtwkChan:  make(chan struct{}),
+		shutdownEpochChan: make(chan struct{}),
 	}
 
 	// dial UDP
@@ -132,6 +141,8 @@ func (c *client) Close() error {
 func (c *client) sendMsg(msg *Message) {
 	packet = json.Marshal(msg)
 	lspnet.Write(packet)
+
+	LOGV.Printf("message sent: %s ", msg.String())
 }
 
 /*
@@ -150,16 +161,43 @@ func (c *client) masterEventHandler() {
 			// TODO: handle close request
 		case msg := <-c.msgArriveChan:
 			// TODO: handle msg received from ntwk handler
+		case <-c.epochChan:
+			// TODO handle timeout, lost, resend...
 		}
 	}
 }
 
 // network event handler, listen on port for msgs
 func (c *client) networkEventHandler() {
-	// TODO: read from udp conn, direct to master event handler
+	LOGV.Println("Network Event Handler started!")
+
+	buffer := make([]byte, 1500)
+	msg := new(Message)
+
+	for {
+		select {
+		case <-c.shutdownNtwkChan:
+			LOGV.Println("Network EventHandler shutdown!")
+			return
+		default:
+			lspnet.Read(buffer)
+			json.Unmarshal(buffer, msg)
+			c.msgArriveChan <- msg
+		}
+	}
 }
 
 // handles epoch events
 func (c *client) epochHandler() {
-	// TODO, set timer, fireup regularly
+	LOGV.Println("Epoch Handler started!")
+
+	for {
+		select {
+		case <-time.After(DefaultEpochMillis * time.Millisecond):
+			c.epochChan <- struct{}{}
+		case <-c.shutdownEpochChan:
+			LOGV.Println("Epoch Handler shutdown!")
+			return
+		}
+	}
 }
