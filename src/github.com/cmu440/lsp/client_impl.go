@@ -41,10 +41,12 @@ type client struct {
 	closeRequestQueue *list.List // close requests waiting to be responded
 
 	// channels
-	connAckChan  chan struct{}        // notify NewClient conn ack is received
-	readReqChan  <-chan *readRequest  // communicate with Read
-	closeReqChan <-chan *closeRequest // communicate with Close
-	shutdown     chan struct{}        // to shutdown all goroutines
+	connAckChan   chan struct{}        // notify NewClient conn ack is received
+	readReqChan   <-chan *readRequest  // communicate with Read
+	closeReqChan  <-chan *closeRequest // communicate with Close
+	writeReqChan  <-chan []byte        //communicate with Write
+	msgArriveChan <-chan *Message      //new msg arrived
+	shutdown      chan struct{}        // to shutdown all goroutines
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -77,17 +79,22 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		connAckChan:       make(chan struct{}),
 		readReqChan:       make(<-chan *readRequest),
 		closeReqChan:      make(<-chan *closeRequest),
+		writeReqChan:      make(chan []byte),
+		msgArriveChan:     make(chan *Message),
 		shutdown:          make(chan struct{}),
 	}
 
 	// dial UDP
 	udpAddr := lspnet.ResolveUDPAddr("udp", hostport)
+	client.conn = lspnet.DialUDP("udp", nil, udpAddr)
+
+	// start several goroutines
 
 	return nil, errors.New("not yet implemented")
 }
 
 func (c *client) ConnID() int {
-	return -1
+	return client.connId
 }
 
 func (c *client) Read() ([]byte, error) {
@@ -102,4 +109,19 @@ func (c *client) Write(payload []byte) error {
 
 func (c *client) Close() error {
 	return errors.New("not yet implemented")
+}
+
+func (c *client) masterEventHandler() {
+	for {
+		select {
+		case req := <-client.readReqChan:
+			// TODO: handle read request
+		case payload := <-client.writeReqChan:
+			// TODO: handle write request
+		case req := <-client.closeReqChan:
+			// TODO: handle close request
+		case msg := <-client.msgArriveChan:
+			// TODO: handle msg received from ntwk handler
+		}
+	}
 }
