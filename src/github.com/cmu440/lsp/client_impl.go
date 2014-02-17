@@ -6,7 +6,12 @@ import (
 	"container/list"
 	"errors"
 	"github.com/cmu440/lspnet"
+	"log"
+	"os"
 )
+
+var LOGE = log.new(os.Stderr, "ERROR", log.Lmicroseconds|log.Lshortfile)
+var LOGV = log.New(ioutil.Discard, "VERBOSE ", log.Lmicroseconds|log.Lshortfile)
 
 type client struct {
 	connId int             // connection id
@@ -36,9 +41,10 @@ type client struct {
 	closeRequestQueue *list.List // close requests waiting to be responded
 
 	// channels
-	connAckChannel chan struct{}        // notify NewClient conn ack is received
-	readReqChan    <-chan *readRequest  // communicate with Read
-	closeReqChan   <-chan *closeRequest // communicate with Close
+	connAckChan  chan struct{}        // notify NewClient conn ack is received
+	readReqChan  <-chan *readRequest  // communicate with Read
+	closeReqChan <-chan *closeRequest // communicate with Close
+	shutdown     chan struct{}        // to shutdown all goroutines
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -52,6 +58,31 @@ type client struct {
 // hostport is a colon-separated string identifying the server's host address
 // and port number (i.e., "localhost:9999").
 func NewClient(hostport string, params *Params) (Client, error) {
+
+	// initialize client struct
+	cl := &client{
+		isConnected:       false,
+		isClosed:          false,
+		isLost:            false,
+		expectedSeqId:     0,
+		clientSeqId:       0,
+		minAckedSeqid:     -1,
+		maxReceivedSeqId:  -1,
+		noMsgEpochCount:   0,
+		recvMsgLastEpoch:  false,
+		sentMsgBufs:       list.New(),
+		receivedMsgBuf:    make(map[int]*Message),
+		readRequestQueue:  list.New(),
+		closeRequestQueue: list.New(),
+		connAckChan:       make(chan struct{}),
+		readReqChan:       make(<-chan *readRequest),
+		closeReqChan:      make(<-chan *closeRequest),
+		shutdown:          make(chan struct{}),
+	}
+
+	// dial UDP
+	udpAddr := lspnet.ResolveUDPAddr("udp", hostport)
+
 	return nil, errors.New("not yet implemented")
 }
 
