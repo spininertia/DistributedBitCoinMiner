@@ -1,14 +1,15 @@
-// define read and close request types
+// define read, write and close request types
 
 package lsp
 
 type readRequest struct {
-	response chan *Message
+	expectedSeqId int
+	response      chan []byte
 }
 
 func newReadRequest() *readRequest {
 	return &readRequest{
-		response: make(chan *Message),
+		response: make(chan []byte),
 	}
 }
 
