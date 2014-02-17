@@ -2,10 +2,43 @@
 
 package lsp
 
-import "errors"
+import (
+	"container/list"
+	"errors"
+	"github.com/cmu440/lspnet"
+)
 
 type client struct {
-	// TODO: implement this!
+	connId int             // connection id
+	conn   *lspnet.UDPConn // udp connection
+
+	// status fields
+	isConnected bool // indicates whether conn request msg is acked
+	isClosed    bool // indicates whether application has called close method
+	isLost      bool // indicates whether the connection is lost
+
+	// sequence ids
+	expectedSeqId    int // expected server side data msg seq id
+	clientSeqId      int // next seq id of client data msg
+	minAckedSeqId    int // smallest seq id that is Acked
+	maxReceivedSeqId int // maximum received data msg sequence id
+
+	// timeout counters
+	noMsgEpochCount  int  // #consecutive epochs that no msg is received
+	recvMsgLastEpoch bool // indicates whether msg is received in last epoch
+
+	// bufs
+	sentMsgBufs    *list.List       // msgs wating to be acked or sent
+	receivedMsgBuf map[int]*Message //received msgs buf, key is sequence id
+
+	// request queues
+	readRequestQueue  *list.List // read requests waiting to be responded
+	closeRequestQueue *list.List // close requests waiting to be responded
+
+	// channels
+	connAckChannel chan struct{}       // notify NewClient conn ack is received
+	readReqChan    <-chan readRequest  // communicate with Read
+	closeReqChan   <-chan closeRequest // communicate with Close
 }
 
 // NewClient creates, initiates, and returns a new client. This function
