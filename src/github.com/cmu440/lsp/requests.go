@@ -18,6 +18,6 @@ type closeRequest struct {
 
 func newCloseRequest() *closeRequest {
 	return &closeRequest{
-		closeRequest: make(chan struct{}),
+		response: make(chan struct{}),
 	}
 }
