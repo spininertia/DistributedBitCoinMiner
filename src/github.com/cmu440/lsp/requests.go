@@ -12,6 +12,18 @@ func newReadRequest() *readRequest {
 	}
 }
 
+type writeRequest struct {
+	payload  []byte
+	response chan struct{}
+}
+
+func newWriteRequest(payload []byte) *writeRequest {
+	return &writeRequest{
+		payload:  pyload,
+		response: make(chan struct{}),
+	}
+}
+
 type closeRequest struct {
 	response chan struct{}
 }
