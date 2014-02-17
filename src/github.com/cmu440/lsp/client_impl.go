@@ -24,7 +24,6 @@ type client struct {
 	conn   *lspnet.UDPConn // udp connection
 
 	// status fields
-	//	isConnected bool // duplicated, can be deduceted by expectedSeqId
 	isClosed bool // indicates whether application has called close method
 	isLost   bool // indicates whether the connection is lost
 
@@ -167,7 +166,7 @@ func (c *client) sendMsg(msg *Message) {
 //
 func (c *client) getMinExpectedSeqId() int {
 	if c.readRequestQueue.Len() > 0 {
-		return c.readRequestQueue.Front().Value.(readRequest).expectedSeqId
+		return c.readRequestQueue.Front().Value.(*readRequest).expectedSeqId
 	}
 	return c.expectedSeqId
 }
@@ -183,6 +182,12 @@ func (c *client) handleReadRequest(request *readRequest) {
 		// TODO:check whether requested msg is in buf
 		// if yes, grab and go, also remember to update sequence ids..
 		// possibly delete some entries in bufmap
+		if msg, ok := c.receivedMsgBuf[readRequest.expectedSeqId]; ok {
+			readRequest.response <- msg.Payload
+			if msg.SeqNum <= c.maxReceivedSeqId-c.params.WindowSize {
+				delete(c.receivedMsgBuf, msg.SeqNum)
+			}
+		}
 	}
 }
 
@@ -247,7 +252,34 @@ func (c *client) handleNewMsg(msg *Message) {
 			}
 		}
 	} else {
-		// TODO: handle data messages
+		// handle data messages
+
+		// first check duplication
+		if _, present := c.receivedMsgBuf[msg.SeqNum]; !present &&
+			msg.SeqNum < c.getMinExpectedSeqId() {
+			// add to buf
+			c.receivedMsgBuf[msg.SeqNum] = msg
+
+			// update client status
+			if msg.SeqNum > c.maxReceivedSeqId {
+				// remove some entries in map
+				for id := c.maxReceivedSeqId - c.params.WindowSize + 1; id <=
+					msg.SeqNum-c.params.WindowSize &&
+					id < c.getMinExpectedSeqId(); i++ {
+					if _, present := c.receivedMsgBuf[id]; present {
+						delete(c.receivedMsgBuf, id)
+					}
+				}
+				c.maxReceivedSeqId = msg.SeqNum
+			}
+
+			// possibly notify read
+			if c.readRequestQueue.Len() > 0 &&
+				c.readRequestQueue.Front().Value.(*readRequest).expectedSeqId ==
+					msg.SeqNum {
+				c.notifyRead()
+			}
+		}
 
 	}
 }
@@ -327,7 +359,22 @@ func (c *client) notifyClose() {
 
 // handle pending Read requests
 func (c *client) notifyRead() {
-	// tricky here, be careful
+	// get called when there is pending read request
+	// and also new msg received matched the expectedSeqId of the frist request
+
+	// clear queue, deliver payload to Read
+	for e := c.readRequestQueue.Front(); e != nil; e = e.Next() {
+		if msg, ok :=
+			c.receivedMsgBuf[e.Value.(*readRequest).expectedSeqId]; ok {
+			e.Value.(*readRequest).response <- msg.Payload
+
+			// possibly delete this entry in map if it's outside the window
+			if msg.SeqNum <= c.maxReceivedSeqId-c.params.WindowSize {
+				delete(c.receivedMsgBuf, msg.SeqNum)
+			}
+		}
+	}
+
 }
 
 /*
