@@ -39,7 +39,7 @@ type client struct {
 	recvMsgLastEpoch bool // indicates whether msg is received in last epoch
 
 	// bufs
-	sentMsgBufs    *list.List       // msgs wating to be acked or sent
+	sentMsgBuf     *list.List       // msgs wating to be acked or sent
 	receivedMsgBuf map[int]*Message //received msgs buf, key is sequence id
 
 	// request queues
@@ -47,15 +47,15 @@ type client struct {
 	closeRequestQueue *list.List // close requests waiting to be responded
 
 	// channels
-	connAckChan        chan struct{}        // notify NewClient conn ack is received
-	readReqChan        <-chan *readRequest  // communicate with Read
-	closeReqChan       <-chan *closeRequest // communicate with Close
-	writeReqChan       <-chan []byte        //communicate with Write
-	msgArriveChan      <-chan *Message      //new msg arrived
-	epochChan          <-chan struct{}      // receive epoch notification
-	shutdownNtwkChan   chan struct{}        // to shutdown ntwk handler
-	shutdownEpochChan  chan struct{}        // to shutdown epoch handler
-	shutdownMasterChan chan struct{}        //to shutdown master handler
+	connAckChan        chan struct{}      // notify NewClient conn ack is received
+	readReqChan        chan *readRequest  // communicate with Read
+	closeReqChan       chan *closeRequest // communicate with Close
+	writeReqChan       chan *writeRequest //communicate with Write
+	msgArriveChan      chan *Message      //new msg arrived
+	epochChan          chan struct{}      // receive epoch notification
+	shutdownNtwkChan   chan struct{}      // to shutdown ntwk handler
+	shutdownEpochChan  chan struct{}      // to shutdown epoch handler
+	shutdownMasterChan chan struct{}      //to shutdown master handler
 
 	// params
 	params *Params
@@ -84,20 +84,20 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		maxReceivedSeqId:   -1,
 		noMsgEpochCount:    0,
 		recvMsgLastEpoch:   false,
-		sentMsgBufs:        list.New(),
+		sentMsgBuf:         list.New(),
 		receivedMsgBuf:     make(map[int]*Message),
 		readRequestQueue:   list.New(),
 		closeRequestQueue:  list.New(),
 		connAckChan:        make(chan struct{}),
-		readReqChan:        make(<-chan *readRequest),
-		closeReqChan:       make(<-chan *closeRequest),
-		writeReqChan:       make(chan []byte),
+		readReqChan:        make(chan *readRequest),
+		closeReqChan:       make(chan *closeRequest),
+		writeReqChan:       make(chan *writeRequest),
 		msgArriveChan:      make(chan *Message),
 		epochChan:          make(chan struct{}),
 		shutdownNtwkChan:   make(chan struct{}),
 		shutdownEpochChan:  make(chan struct{}),
 		shutdownMasterChan: make(chan struct{}),
-		params: params
+		params:             params,
 	}
 
 	// dial UDP
@@ -134,7 +134,12 @@ func (c *client) Read() ([]byte, error) {
 }
 
 func (c *client) Write(payload []byte) error {
-	return errors.New("not yet implemented")
+	request := newWriteRequest(payload)
+	_, err := <-writeRequest.response
+	if err != nil {
+		return errors.New("Connection has been lost!")
+	}
+	return nil
 }
 
 func (c *client) Close() error {
@@ -151,6 +156,25 @@ func (c *client) sendMsg(msg *Message) {
 	lspnet.Write(packet)
 
 	LOGV.Printf("message sent: %s ", msg.String())
+}
+
+func (c *client) handleWriteRequest(request *writeRequest) {
+	// first check if the connection has been lost
+	if c.isLost {
+		close(request.response)
+	} else {
+		// notify Write that request accpepted
+		request.response <- struct{}{}
+
+		// send data message
+		dataMsg := NewData(c.connId, c.clientSeqId, request.payload)
+		c.clientSeqId++
+		c.sendMsg(dataMsg)
+
+		// add data message to sentMsgBuf
+		c.sentMsgBuf.PushBack(dataMsg)
+	}
+
 }
 
 // handle newly arrived messages
@@ -223,11 +247,11 @@ func (c *client) masterEventHandler() {
 	defer c.conn.Close()
 	for {
 		select {
-		case req := <-c.readReqChan:
+		case request := <-c.readReqChan:
 			// TODO: handle read request
-		case payload := <-c.writeReqChan:
-			// TODO: handle write request
-		case req := <-c.closeReqChan:
+		case request := <-c.writeReqChan:
+			c.handleWriteRequest(request)
+		case request := <-c.closeReqChan:
 			// TODO: handle close request
 		case msg := <-c.msgArriveChan:
 			c.handleNewMsg(msg)
