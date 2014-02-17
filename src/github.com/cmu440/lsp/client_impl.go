@@ -16,7 +16,7 @@ const (
 	Bufsize = 1500
 )
 
-var LOGE = log.new(os.Stderr, "ERROR", log.Lmicroseconds|log.Lshortfile)
+var LOGE = log.New(os.Stderr, "ERROR", log.Lmicroseconds|log.Lshortfile)
 var LOGV = log.New(ioutil.Discard, "VERBOSE ", log.Lmicroseconds|log.Lshortfile)
 
 type client struct {
@@ -31,7 +31,6 @@ type client struct {
 	// sequence ids
 	expectedSeqId    int // expected server side data msg seq id
 	clientSeqId      int // next seq id of client data msg
-	minAckedSeqId    int // smallest seq id that is Acked
 	maxReceivedSeqId int // maximum received data msg sequence id
 
 	// timeout counters
@@ -75,12 +74,10 @@ func NewClient(hostport string, params *Params) (Client, error) {
 
 	// initialize client struct
 	c := &client{
-		// isConnected:       false,
 		isClosed:           false,
 		isLost:             false,
 		expectedSeqId:      0,
 		clientSeqId:        0,
-		minAckedSeqid:      -1,
 		maxReceivedSeqId:   -1,
 		noMsgEpochCount:    0,
 		recvMsgLastEpoch:   false,
@@ -119,6 +116,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		LOGV.Println("Connect Failed")
 		return nll, err
 	}
+	LOGV.Println("Connection Established")
 
 	return c, nil
 }
@@ -128,9 +126,12 @@ func (c *client) ConnID() int {
 }
 
 func (c *client) Read() ([]byte, error) {
-	// TODO: remove this line when you are ready to begin implementing this method.
-	select {} // Blocks indefinitely.
-	return nil, errors.New("not yet implemented")
+	request := newReadRequest()
+	payload, err := <-request.response
+	if err != nil {
+		return err
+	}
+	return payload, nil
 }
 
 func (c *client) Write(payload []byte) error {
@@ -143,9 +144,11 @@ func (c *client) Write(payload []byte) error {
 }
 
 func (c *client) Close() error {
+	LOGV.Println("Close requested!")
 	request := newCloseRequest()
 	c.closeReqChan <- request
 	<-request.response
+	LOGV.Println("Close responded! Client shutdown!")
 	return nil
 }
 
@@ -159,6 +162,28 @@ func (c *client) sendMsg(msg *Message) {
 	lspnet.Write(packet)
 
 	LOGV.Printf("message sent: %s ", msg.String())
+}
+
+//
+func (c *client) getMinExpectedSeqId() int {
+	if c.readRequestQueue.Len() > 0 {
+		return c.readRequestQueue.Front().Value.(readRequest).expectedSeqId
+	}
+	return c.expectedSeqId
+}
+
+func (c *client) handleReadRequest(request *readRequest) {
+	// first check whether the connection is closed or lost
+	if c.isLost || c.isClosed {
+		close(request.response)
+	} else {
+		// TODO recheck
+		readRequest.expectedSeqId = c.expectedSeqId
+		c.expectedSeqId++
+		// TODO:check whether requested msg is in buf
+		// if yes, grab and go, also remember to update sequence ids..
+		// possibly delete some entries in bufmap
+	}
 }
 
 func (c *client) handleWriteRequest(request *writeRequest) {
@@ -188,6 +213,7 @@ func (c *client) handleCloseRequest(request *closeRequest) {
 			close(c.shutdownNtwkChan)
 		}
 		close(c.shutdownMasterChan)
+		c.isClosed = true
 		request.response <- struct{}{}
 	} else {
 		// push into queue, waiting to be processed
@@ -202,23 +228,32 @@ func (c *client) handleNewMsg(msg *Message) {
 			// update status
 			c.expectedSeqId = 1
 			c.maxReceivedSeqId = 0
-			c.minAckedSeqId = 0
 			c.clientSeqId = 1
 
 			// notify NewClient
 			c.connAckChan <- struct{}{}
 		} else {
-			// TODO: check against sentMsgBuf
+			// check against sentMsgBuf
+			for e := c.sentMsgBuf.Front(); e != nil; e = e.Next() {
+				if msg.SeqNum == e.Value.(*Message).SeqNum {
+					c.sentMsgBuf.Remove(e)
+					break
+				}
+			}
+
+			// check whether there is pending close request
+			if c.closeRequestQueue.Len() > 0 && c.sentMsgBuf.Len() == 0 {
+				c.notifyClose()
+			}
 		}
 	} else {
 		// TODO: handle data messages
+
 	}
 }
 
 // handle epoch event, do regular checkup
 func (c *client) handleEpochEvent() {
-	// TODO handle timeout, lost, resend...
-
 	// check timeout
 	if !c.recvMsgLastEpoch {
 		c.noMsgEpochCount++
@@ -242,18 +277,57 @@ func (c *client) handleEpochEvent() {
 		return
 	}
 
-	// TODO:resending issues
+	// if conn msg hasn't been ACKed
+	if c.expectedSeqId == 0 {
+		c.sendMsg(NewConnect())
+	}
+
+	// if conn established but no msg received
+	if c.getMinExpectedSeqId() == 1 && len(c.receivedMsgBuf) == 0 {
+		c.sendMsg(NewAck(c.connId, 0))
+	}
+
+	// resend messages that has not been ACKed
+	// apply sliding window here
+	if c.sentMsgBuf.Len() > 0 {
+		windowUpperLimit := c.sentMsgBuf.Front().Value.(*Message).SeqNum +
+			c.params.WindowSize
+		for e := c.sentMsgBuf.Front(); e != nil &&
+			e.Value.(*Message).SeqNum < windowTestMode; e = e.Next() {
+			c.sendMsg(e.Value.(*Message))
+		}
+	}
+
+	// resend ACKs
+	if c.maxReceivedSeqId > 0 {
+		for seqId := c.maxReceivedSeqId; seqId > 0 &&
+			seqId > c.maxReceivedSeqId-c.params.WindowSize; seqId-- {
+			if msg, ok := c.receivedMsgBuf[seqId]; ok {
+				c.sendMsg(NewAck(c.connId, msg.SeqNum))
+			}
+		}
+	}
 
 }
 
+/*
+ * notifers, notify blocked pending request
+ */
+
+// handle pending Close request
 func (c *client) notifyClose() {
-	// may be called when
+	// may be called when close is not imediately responded
 	// 1. timeout and needs close
 	// 2. needs close and the last unacked/unsent msg was acked
-	// 3. needs cloes and all msgs has been sent at that moment
 	close(c.shutdownMasterChan)
+	c.isClosed = true
 	req := c.closeRequestQueue.Remove(c.closeRequestQueue.Front())
 	req.response <- struct{}{}
+}
+
+// handle pending Read requests
+func (c *client) notifyRead() {
+	// tricky here, be careful
 }
 
 /*
@@ -266,7 +340,7 @@ func (c *client) masterEventHandler() {
 	for {
 		select {
 		case request := <-c.readReqChan:
-			// TODO: handle read request
+			c.handleReadRequest(request)
 		case request := <-c.writeReqChan:
 			c.handleWriteRequest(request)
 		case request := <-c.closeReqChan:
