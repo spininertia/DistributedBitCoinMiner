@@ -4,6 +4,7 @@ package lsp
 
 import (
 	"container/list"
+	"encoding/json"
 	"errors"
 	"github.com/cmu440/lspnet"
 	"log"
@@ -62,7 +63,7 @@ type client struct {
 func NewClient(hostport string, params *Params) (Client, error) {
 
 	// initialize client struct
-	cl := &client{
+	c := &client{
 		isConnected:       false,
 		isClosed:          false,
 		isLost:            false,
@@ -86,11 +87,25 @@ func NewClient(hostport string, params *Params) (Client, error) {
 
 	// dial UDP
 	udpAddr := lspnet.ResolveUDPAddr("udp", hostport)
-	client.conn = lspnet.DialUDP("udp", nil, udpAddr)
+	c.conn = lspnet.DialUDP("udp", nil, udpAddr)
 
 	// start several goroutines
+	go c.masterEventHandler()
+	go c.networkEventHandler()
+	go c.epochHandler()
 
-	return nil, errors.New("not yet implemented")
+	// send conn request to server
+	c.sendMsg(NewConnect())
+
+	// waiting for conn established signal
+	_, err := <-c.connAckChan
+	if err != nil {
+		// failed
+		LOGV.Println("Connect Failed")
+		return nll, err
+	}
+
+	return c, nil
 }
 
 func (c *client) ConnID() int {
@@ -111,17 +126,40 @@ func (c *client) Close() error {
 	return errors.New("not yet implemented")
 }
 
+/*
+ * helper functions
+ */
+func (c *client) sendMsg(msg *Message) {
+	packet = json.Marshal(msg)
+	lspnet.Write(packet)
+}
+
+/*
+ * handlers/goroutines
+ */
+
+// master goroutine, control access to share resources
 func (c *client) masterEventHandler() {
 	for {
 		select {
-		case req := <-client.readReqChan:
+		case req := <-c.readReqChan:
 			// TODO: handle read request
-		case payload := <-client.writeReqChan:
+		case payload := <-c.writeReqChan:
 			// TODO: handle write request
-		case req := <-client.closeReqChan:
+		case req := <-c.closeReqChan:
 			// TODO: handle close request
-		case msg := <-client.msgArriveChan:
+		case msg := <-c.msgArriveChan:
 			// TODO: handle msg received from ntwk handler
 		}
 	}
+}
+
+// network event handler, listen on port for msgs
+func (c *client) networkEventHandler() {
+	// TODO: read from udp conn, direct to master event handler
+}
+
+// handles epoch events
+func (c *client) epochHandler() {
+	// TODO, set timer, fireup regularly
 }
