@@ -20,7 +20,7 @@ type writeRequest struct {
 
 func newWriteRequest(payload []byte) *writeRequest {
 	return &writeRequest{
-		payload:  pyload,
+		payload:  payload,
 		response: make(chan struct{}),
 	}
 }

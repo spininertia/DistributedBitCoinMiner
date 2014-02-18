@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/cmu440/lspnet"
+	"io/ioutil"
 	"log"
 	"os"
 	"time"
@@ -18,6 +19,7 @@ const (
 
 var LOGE = log.New(os.Stderr, "ERROR", log.Lmicroseconds|log.Lshortfile)
 var LOGV = log.New(ioutil.Discard, "VERBOSE ", log.Lmicroseconds|log.Lshortfile)
+var LOGD = log.New(ioutil.Discard, "DEBUG", log.Lmicroseconds|log.Lshortfile)
 
 type client struct {
 	connId int             // connection id
@@ -38,22 +40,22 @@ type client struct {
 
 	// bufs
 	sentMsgBuf     *list.List       // msgs wating to be acked or sent
-	receivedMsgBuf map[int]*Message //received msgs buf, key is sequence id
+	receivedMsgBuf map[int]*Message // received msgs buf, key is sequence id
 
 	// request queues
 	readRequestQueue  *list.List // read requests waiting to be responded
 	closeRequestQueue *list.List // close requests waiting to be responded
 
 	// channels
-	connAckChan        chan struct{}      // notify NewClient conn ack is received
+	connAckChan        chan struct{}      // notify NewClient conn ack received
 	readReqChan        chan *readRequest  // communicate with Read
 	closeReqChan       chan *closeRequest // communicate with Close
-	writeReqChan       chan *writeRequest //communicate with Write
-	msgArriveChan      chan *Message      //new msg arrived
+	writeReqChan       chan *writeRequest // communicate with Write
+	msgArriveChan      chan *Message      // new msg arrived
 	epochChan          chan struct{}      // receive epoch notification
 	shutdownNtwkChan   chan struct{}      // to shutdown ntwk handler
 	shutdownEpochChan  chan struct{}      // to shutdown epoch handler
-	shutdownMasterChan chan struct{}      //to shutdown master handler
+	shutdownMasterChan chan struct{}      // to shutdown master handler
 
 	// params
 	params *Params
@@ -97,9 +99,8 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	}
 
 	// dial UDP
-	udpAddr := lspnet.ResolveUDPAddr("udp", hostport)
-	c.conn = lspnet.DialUDP("udp", nil, udpAddr)
-
+	udpAddr, _ := lspnet.ResolveUDPAddr("udp", hostport)
+	c.conn, _ = lspnet.DialUDP("udp", nil, udpAddr)
 	// start several goroutines
 	go c.masterEventHandler()
 	go c.networkEventHandler()
@@ -109,11 +110,11 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	c.sendMsg(NewConnect())
 
 	// waiting for conn established signal
-	_, err := <-c.connAckChan
-	if err != nil {
+	_, ok := <-c.connAckChan
+	if !ok {
 		// failed
 		LOGV.Println("Connect Failed")
-		return nll, err
+		return nil, errors.New("Connect Failed")
 	}
 	LOGV.Println("Connection Established")
 
@@ -121,29 +122,30 @@ func NewClient(hostport string, params *Params) (Client, error) {
 }
 
 func (c *client) ConnID() int {
-	return client.connId
+	return c.connId
 }
 
 func (c *client) Read() ([]byte, error) {
 	request := newReadRequest()
-	payload, err := <-request.response
-	if err != nil {
-		return err
+	c.readReqChan <- request
+	payload, ok := <-request.response
+	if !ok {
+		return nil, errors.New("Application Read Failed due to lost or close")
 	}
 	return payload, nil
 }
 
 func (c *client) Write(payload []byte) error {
 	request := newWriteRequest(payload)
-	_, err := <-writeRequest.response
-	if err != nil {
+	c.writeReqChan <- request
+	_, ok := <-request.response
+	if !ok {
 		return errors.New("Connection has been lost!")
 	}
 	return nil
 }
 
 func (c *client) Close() error {
-	LOGV.Println("Close requested!")
 	request := newCloseRequest()
 	c.closeReqChan <- request
 	<-request.response
@@ -157,13 +159,10 @@ func (c *client) Close() error {
 
 // marshalling and send message via udp connection
 func (c *client) sendMsg(msg *Message) {
-	packet := json.Marshal(msg)
-	lspnet.Write(packet)
-
-	LOGV.Printf("message sent: %s ", msg.String())
+	packet, _ := json.Marshal(msg)
+	c.conn.Write(packet)
 }
 
-//
 func (c *client) getMinExpectedSeqId() int {
 	if c.readRequestQueue.Len() > 0 {
 		return c.readRequestQueue.Front().Value.(*readRequest).expectedSeqId
@@ -177,16 +176,20 @@ func (c *client) handleReadRequest(request *readRequest) {
 		close(request.response)
 	} else {
 		// TODO recheck
-		readRequest.expectedSeqId = c.expectedSeqId
+		request.expectedSeqId = c.expectedSeqId
 		c.expectedSeqId++
-		// TODO:check whether requested msg is in buf
+
+		// check whether requested msg is in buf
 		// if yes, grab and go, also remember to update sequence ids..
 		// possibly delete some entries in bufmap
-		if msg, ok := c.receivedMsgBuf[readRequest.expectedSeqId]; ok {
-			readRequest.response <- msg.Payload
+		if msg, ok := c.receivedMsgBuf[request.expectedSeqId]; ok {
+			request.response <- msg.Payload
 			if msg.SeqNum <= c.maxReceivedSeqId-c.params.WindowSize {
 				delete(c.receivedMsgBuf, msg.SeqNum)
 			}
+		} else {
+			// enque
+			c.readRequestQueue.PushBack(request)
 		}
 	}
 }
@@ -199,10 +202,14 @@ func (c *client) handleWriteRequest(request *writeRequest) {
 		// notify Write that request accpepted
 		request.response <- struct{}{}
 
-		// send data message
+		// send data message only if it's within the sliding window
 		dataMsg := NewData(c.connId, c.clientSeqId, request.payload)
 		c.clientSeqId++
-		c.sendMsg(dataMsg)
+		if c.sentMsgBuf.Len() == 0 ||
+			c.sentMsgBuf.Front().Value.(*Message).SeqNum+c.params.WindowSize >
+				dataMsg.SeqNum {
+			c.sendMsg(dataMsg)
+		}
 
 		// add data message to sentMsgBuf
 		c.sentMsgBuf.PushBack(dataMsg)
@@ -210,6 +217,7 @@ func (c *client) handleWriteRequest(request *writeRequest) {
 }
 
 func (c *client) handleCloseRequest(request *closeRequest) {
+	LOGV.Println("Close request received")
 	// first check if connnection is lost or sentBuf is empty
 	if c.isLost || c.sentMsgBuf.Len() == 0 {
 		//if not lost, still needs to close ntwk and epoch handler
@@ -228,8 +236,11 @@ func (c *client) handleCloseRequest(request *closeRequest) {
 
 // handle newly arrived messages
 func (c *client) handleNewMsg(msg *Message) {
+	LOGV.Println("Client receive new msg", msg)
+	c.recvMsgLastEpoch = true
 	if msg.Type == MsgAck {
 		if c.expectedSeqId == 0 {
+			c.connId = msg.ConnID
 			// update status
 			c.expectedSeqId = 1
 			c.maxReceivedSeqId = 0
@@ -239,6 +250,7 @@ func (c *client) handleNewMsg(msg *Message) {
 			c.connAckChan <- struct{}{}
 		} else {
 			// check against sentMsgBuf
+			// TODO: shall we send pending msgs here? or waiting for epoch
 			for e := c.sentMsgBuf.Front(); e != nil; e = e.Next() {
 				if msg.SeqNum == e.Value.(*Message).SeqNum {
 					c.sentMsgBuf.Remove(e)
@@ -251,28 +263,27 @@ func (c *client) handleNewMsg(msg *Message) {
 				c.notifyClose()
 			}
 		}
-	} else {
+	} else if msg.Type == MsgData {
 		// handle data messages
-
 		// first check duplication
 		if _, present := c.receivedMsgBuf[msg.SeqNum]; !present &&
-			msg.SeqNum < c.getMinExpectedSeqId() {
+			msg.SeqNum >= c.getMinExpectedSeqId() {
+			// ack
+			c.sendMsg(NewAck(c.connId, msg.SeqNum))
 			// add to buf
 			c.receivedMsgBuf[msg.SeqNum] = msg
-
 			// update client status
 			if msg.SeqNum > c.maxReceivedSeqId {
 				// remove some entries in map
 				for id := c.maxReceivedSeqId - c.params.WindowSize + 1; id <=
 					msg.SeqNum-c.params.WindowSize &&
-					id < c.getMinExpectedSeqId(); i++ {
+					id < c.getMinExpectedSeqId(); id++ {
 					if _, present := c.receivedMsgBuf[id]; present {
 						delete(c.receivedMsgBuf, id)
 					}
 				}
 				c.maxReceivedSeqId = msg.SeqNum
 			}
-
 			// possibly notify read
 			if c.readRequestQueue.Len() > 0 &&
 				c.readRequestQueue.Front().Value.(*readRequest).expectedSeqId ==
@@ -289,7 +300,7 @@ func (c *client) handleEpochEvent() {
 	// check timeout
 	if !c.recvMsgLastEpoch {
 		c.noMsgEpochCount++
-		LOGV.Println("It's been %d epoch that no msg was received",
+		LOGV.Printf("It's been %d epoch that no msg was received\n",
 			c.noMsgEpochCount)
 	} else {
 		c.noMsgEpochCount = 0
@@ -325,8 +336,9 @@ func (c *client) handleEpochEvent() {
 		windowUpperLimit := c.sentMsgBuf.Front().Value.(*Message).SeqNum +
 			c.params.WindowSize
 		for e := c.sentMsgBuf.Front(); e != nil &&
-			e.Value.(*Message).SeqNum < windowTestMode; e = e.Next() {
+			e.Value.(*Message).SeqNum < windowUpperLimit; e = e.Next() {
 			c.sendMsg(e.Value.(*Message))
+			LOGV.Println("Client Resend Data", e.Value.(*Message))
 		}
 	}
 
@@ -335,7 +347,9 @@ func (c *client) handleEpochEvent() {
 		for seqId := c.maxReceivedSeqId; seqId > 0 &&
 			seqId > c.maxReceivedSeqId-c.params.WindowSize; seqId-- {
 			if msg, ok := c.receivedMsgBuf[seqId]; ok {
-				c.sendMsg(NewAck(c.connId, msg.SeqNum))
+				ack := NewAck(c.connId, msg.SeqNum)
+				c.sendMsg(ack)
+				LOGV.Println("Client Resend ACK", ack)
 			}
 		}
 	}
@@ -354,7 +368,7 @@ func (c *client) notifyClose() {
 	close(c.shutdownMasterChan)
 	c.isClosed = true
 	req := c.closeRequestQueue.Remove(c.closeRequestQueue.Front())
-	req.response <- struct{}{}
+	req.(*closeRequest).response <- struct{}{}
 }
 
 // handle pending Read requests
@@ -363,18 +377,22 @@ func (c *client) notifyRead() {
 	// and also new msg received matched the expectedSeqId of the frist request
 
 	// clear queue, deliver payload to Read
-	for e := c.readRequestQueue.Front(); e != nil; e = e.Next() {
+	for e := c.readRequestQueue.Front(); e != nil; {
+		next := e.Next()
 		if msg, ok :=
 			c.receivedMsgBuf[e.Value.(*readRequest).expectedSeqId]; ok {
 			e.Value.(*readRequest).response <- msg.Payload
+			c.readRequestQueue.Remove(e)
 
 			// possibly delete this entry in map if it's outside the window
 			if msg.SeqNum <= c.maxReceivedSeqId-c.params.WindowSize {
 				delete(c.receivedMsgBuf, msg.SeqNum)
 			}
+		} else {
+			break
 		}
+		e = next
 	}
-
 }
 
 /*
@@ -407,8 +425,7 @@ func (c *client) masterEventHandler() {
 func (c *client) networkEventHandler() {
 	LOGV.Println("Network Event Handler started!")
 
-	buffer := make([]byte, 1500)
-	msg := new(Message)
+	var buffer [Bufsize]byte
 
 	for {
 		select {
@@ -416,8 +433,12 @@ func (c *client) networkEventHandler() {
 			LOGV.Println("Network EventHandler shutdown!")
 			return
 		default:
-			lspnet.Read(buffer)
-			json.Unmarshal(buffer, msg)
+			msg := new(Message)
+			n, err := c.conn.Read(buffer[0:])
+			if err != nil {
+				LOGE.Println(err)
+			}
+			json.Unmarshal(buffer[0:n], msg)
 			c.msgArriveChan <- msg
 		}
 	}
@@ -429,7 +450,7 @@ func (c *client) epochHandler() {
 
 	for {
 		select {
-		case <-time.After(c.params.EpochMillis * time.Millisecond):
+		case <-time.After(time.Duration(c.params.EpochMillis) * time.Millisecond):
 			c.epochChan <- struct{}{}
 		case <-c.shutdownEpochChan:
 			LOGV.Println("Epoch Handler shutdown!")
