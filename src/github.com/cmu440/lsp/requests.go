@@ -74,3 +74,25 @@ func newConnectRequest(addr *lspnet.UDPAddr) *connectRequest {
 		addr: addr,
 	}
 }
+
+type serverReadResponse struct {
+	connId  int
+	payload []byte
+}
+
+func newServerReadResponse(connId int, payload []byte) *serverReadResponse {
+	return &serverReadResponse{
+		connId:  connId,
+		payload: payload,
+	}
+}
+
+type serverReadRequest struct {
+	response chan *serverReadResponse
+}
+
+func newServerReadRequest() *serverReadRequest {
+	return &serverReadRequest {
+		response: make(chan *serverReadResponse)
+	}
+}
