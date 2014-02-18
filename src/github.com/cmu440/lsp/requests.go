@@ -34,3 +34,29 @@ func newCloseRequest() *closeRequest {
 		response: make(chan struct{}),
 	}
 }
+
+type serverWriteRequest struct {
+	connId   int
+	payload  []byte
+	response chan struct{}
+}
+
+func newServerWriteRequest(connId int, payload []byte) *serverWriteRequest {
+	return &serverWriteRequest{
+		connId:   connId,
+		payload:  payload,
+		response: make(chan struct{}),
+	}
+}
+
+type closeConnRequest struct {
+	connId   int
+	response struct{}
+}
+
+func newCloseConnRequest(connId int) *closeConnRequest {
+	return &closeConnRequest{
+		connId:   connId,
+		response: make(chan struct{}),
+	}
+}
