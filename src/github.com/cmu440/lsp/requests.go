@@ -2,6 +2,10 @@
 
 package lsp
 
+import (
+	"github.com/cmu440/lspnet"
+)
+
 type readRequest struct {
 	expectedSeqId int
 	response      chan []byte
@@ -58,5 +62,15 @@ func newCloseConnRequest(connId int) *closeConnRequest {
 	return &closeConnRequest{
 		connId:   connId,
 		response: make(chan struct{}),
+	}
+}
+
+type connectRequest struct {
+	addr *lspnet.UDPAddr
+}
+
+func newConnectRequest(addr *lspnet.UDPAddr) *connectRequest {
+	return &connectRequest{
+		addr: addr,
 	}
 }
