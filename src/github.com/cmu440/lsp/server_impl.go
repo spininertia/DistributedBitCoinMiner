@@ -198,9 +198,20 @@ func (s *server) handleReadRequest(request *serverReadRequest) {
 			c.isNotified = true
 			close(request.response)
 			return
-		} else if c.isLost && len(c.receivedMsgBuf) == 0 {
-			c.isNotified = true
-			close(request.response)
+		} else if c.isLost {
+			// if lost but have immediate satisfied message
+			if msg, present := c.receivedMsgBuf[c.expectedSeqId]; present {
+				c.expectedSeqId++
+				response := newServerReadResponse(msg.ConnID, msg.Payload)
+				request.response <- response
+				if msg.SeqNum <= c.maxReceivedSeqId-s.params.WindowSize {
+					delete(c.receivedMsgBuf, msg.SeqNum)
+				}
+			} else {
+				// no satisfied message, notify error
+				c.isNotified = true
+				close(request.response)
+			}
 			// TODO: might also remove the clientHandle
 			return
 		} else {
@@ -424,6 +435,13 @@ func (s *server) handleEpochEvent() {
 					close(s.shutdownAll)
 					close(request.response)
 					return
+				}
+
+				// check pending read
+				if s.hasPendingReadRequest() {
+					c.isNotified = true
+					request := s.readRequestQueue.Remove(s.readRequestQueue.Front())
+					close(request.(*serverReadRequest).response)
 				}
 			}
 
