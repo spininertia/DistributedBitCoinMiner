@@ -12,8 +12,9 @@ type clientHandle struct {
 	addr   *lspnet.UDPAddr // remote udp addr
 
 	// status fields
-	isClosed bool // indicates whether application has called close method
-	isLost   bool // indicates whether the connection is lost
+	isClosed   bool // indicates whether application has called closeconn method
+	isLost     bool // indicates whether the connection is lost
+	isNotified bool // indicates whether a Server Read hass been notified err
 
 	// sequence ids
 	expectedSeqId    int // expected server side data msg seq id
@@ -35,7 +36,8 @@ func newClientHandle(connId int, addr *lspnet.UDPAddr) *clientHandle {
 		addr:             addr,
 		isClosed:         false,
 		isLost:           false,
-		expectedSeqId:    0,
+		isNotified:       false,
+		expectedSeqId:    1,
 		nextSendSeqId:    0,
 		maxReceivedSeqId: -1,
 		noMsgEpochCount:  0,

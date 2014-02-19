@@ -55,7 +55,7 @@ func newServerWriteRequest(connId int, payload []byte) *serverWriteRequest {
 
 type closeConnRequest struct {
 	connId   int
-	response struct{}
+	response chan struct{}
 }
 
 func newCloseConnRequest(connId int) *closeConnRequest {
@@ -94,5 +94,17 @@ type serverReadRequest struct {
 func newServerReadRequest() *serverReadRequest {
 	return &serverReadRequest{
 		response: make(chan *serverReadResponse),
+	}
+}
+
+type packet struct {
+	msg  *Message
+	addr *lspnet.UDPAddr
+}
+
+func newPacket(msg *Message, addr *lspnet.UDPAddr) *packet {
+	return &packet{
+		msg:  msg,
+		addr: addr,
 	}
 }
