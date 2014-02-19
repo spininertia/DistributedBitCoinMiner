@@ -255,14 +255,14 @@ func (c *client) handleNewMsg(msg *Message) {
 					break
 				}
 			}
-
 			//send pending message, not waiting epoch
 			if oldWindow > 0 && c.sentMsgBuf.Len() > 0 {
 				newWindow := c.sentMsgBuf.Front().Value.(*Message).SeqNum +
 					c.params.WindowSize
 				for e := c.sentMsgBuf.Front(); e != nil; e = e.Next() {
-					if msg.SeqNum >= oldWindow && msg.SeqNum < newWindow {
-						c.sendMsg(e.Value.(*Message))
+					m := e.Value.(*Message)
+					if m.SeqNum >= oldWindow && m.SeqNum < newWindow {
+						c.sendMsg(m)
 					}
 				}
 			}

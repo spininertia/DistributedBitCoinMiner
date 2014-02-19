@@ -342,8 +342,9 @@ func (s *server) handleNewMsg(msg *Message, addr *lspnet.UDPAddr) {
 			newWindow := c.sentMsgBuf.Front().Value.(*Message).SeqNum +
 				s.params.WindowSize
 			for e := c.sentMsgBuf.Front(); e != nil; e = e.Next() {
-				if msg.SeqNum >= oldWindow && msg.SeqNum < newWindow {
-					s.sendMessage(c.connId, e.Value.(*Message))
+				m := e.Value.(*Message)
+				if m.SeqNum >= oldWindow && m.SeqNum < newWindow {
+					s.sendMessage(c.connId, m)
 				}
 			}
 		}
