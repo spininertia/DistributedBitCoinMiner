@@ -11,13 +11,6 @@ import (
 	"time"
 )
 
-// var LOGE = log.New(os.Stderr, "ERROR", log.Lmicroseconds|log.Lshortfile)
-// var LOGV = log.New(ioutil.Discard, "VERBOSE ", log.Lmicroseconds|log.Lshortfile)
-
-// const (
-// 	Bufsize = 1500
-// )
-
 type server struct {
 	clients       map[int]*clientHandle // map from connId to client hadnle
 	conn          *lspnet.UDPConn       // udp connection
@@ -111,6 +104,7 @@ func (s *server) Write(connID int, payload []byte) error {
 
 func (s *server) CloseConn(connID int) error {
 	request := newCloseConnRequest(connID)
+	s.closeConnReqChan <- request
 	_, ok := <-request.response
 	if !ok {
 		return errors.New("The specifed client does not exist")
@@ -119,9 +113,10 @@ func (s *server) CloseConn(connID int) error {
 }
 
 func (s *server) Close() error {
+	LOGV.Println("Server Close get called")
 	request := newCloseRequest()
+	s.closeReqChan <- request
 	<-request.response
-	LOGV.Println("Server Closed!")
 	return nil
 }
 
@@ -263,14 +258,15 @@ func (s *server) handleCloseConnRequest(request *closeConnRequest) {
 }
 
 func (s *server) handleCloseRequest(request *closeRequest) {
+	LOGV.Println("handlign close request")
 	s.clientToClose = make(map[int]*clientHandle)
 	for id, c := range s.clients {
+		c.isClosed = true
 		// check whether there is pending message to send
 		if !c.isLost && c.sentMsgBuf.Len() > 0 {
 			s.clientToClose[id] = c
 		}
 	}
-
 	// if all client has no pending messages to send
 	if len(s.clientToClose) == 0 {
 		close(s.shutdownAll)
@@ -330,7 +326,6 @@ func (s *server) handleNewMsg(msg *Message, addr *lspnet.UDPAddr) {
 				break
 			}
 		}
-
 		//send pending message, not waiting epoch
 		if oldWindow > 0 && c.sentMsgBuf.Len() > 0 {
 			newWindow := c.sentMsgBuf.Front().Value.(*Message).SeqNum +
@@ -392,8 +387,6 @@ func (s *server) handleNewMsg(msg *Message, addr *lspnet.UDPAddr) {
 
 			// possibly notify read
 			if s.hasPendingReadRequest() {
-				LOGV.Println("Notify Read")
-				LOGV.Println(c.expectedSeqId, msg)
 				if c.expectedSeqId == msg.SeqNum {
 					request :=
 						s.readRequestQueue.Remove(s.readRequestQueue.Front())
@@ -456,6 +449,11 @@ func (s *server) handleEpochEvent() {
 			}
 
 			// resend Acks
+			// TODO: check close here
+			if (c.isClosed || s.isCloseCalled()) && c.sentMsgBuf.Len() == 0 {
+				continue
+			}
+
 			if c.maxReceivedSeqId > 0 {
 				for seqId := c.maxReceivedSeqId; seqId > 0 &&
 					seqId > c.maxReceivedSeqId-s.params.WindowSize; seqId-- {
