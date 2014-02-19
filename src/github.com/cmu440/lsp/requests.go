@@ -65,15 +65,15 @@ func newCloseConnRequest(connId int) *closeConnRequest {
 	}
 }
 
-type connectRequest struct {
-	addr *lspnet.UDPAddr
-}
+// type connectRequest struct {
+// 	conn *lspnet.UDPConn
+// }
 
-func newConnectRequest(addr *lspnet.UDPAddr) *connectRequest {
-	return &connectRequest{
-		addr: addr,
-	}
-}
+// func newConnectRequest(conn *lspnet.UDPConn) *connectRequest {
+// 	return &connectRequest{
+// 		conn: conn,
+// 	}
+// }
 
 type serverReadResponse struct {
 	connId  int
@@ -92,7 +92,7 @@ type serverReadRequest struct {
 }
 
 func newServerReadRequest() *serverReadRequest {
-	return &serverReadRequest {
-		response: make(chan *serverReadResponse)
+	return &serverReadRequest{
+		response: make(chan *serverReadResponse),
 	}
 }
