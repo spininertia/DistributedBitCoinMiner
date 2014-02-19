@@ -58,7 +58,7 @@ func NewServer(port int, params *Params) (Server, error) {
 		writeReqChan:      make(chan *serverWriteRequest),
 		closeConnReqChan:  make(chan *closeConnRequest),
 		closeReqChan:      make(chan *closeRequest),
-		msgArriveChan:     make(chan *packet, 1),
+		msgArriveChan:     make(chan *packet),
 		epochChan:         make(chan struct{}),
 		shutdownNtwk:      make(chan struct{}),
 		shutdownAll:       make(chan struct{}),
@@ -461,7 +461,7 @@ func (s *server) handleEpochEvent() {
 					seqId > c.maxReceivedSeqId-s.params.WindowSize; seqId-- {
 					if msg, ok := c.receivedMsgBuf[seqId]; ok {
 						ack := NewAck(c.connId, msg.SeqNum)
-						s.sendMessage(c.connId, msg)
+						s.sendMessage(c.connId, ack)
 						LOGV.Println("Server Resend ACK", ack)
 					}
 				}

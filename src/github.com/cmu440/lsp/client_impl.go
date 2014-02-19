@@ -9,7 +9,7 @@ import (
 	"github.com/cmu440/lspnet"
 	"io/ioutil"
 	"log"
-	// "os"
+	"os"
 	"time"
 )
 
@@ -19,7 +19,7 @@ const (
 
 var LOGE = log.New(ioutil.Discard, "ERROR", log.Lmicroseconds|log.Lshortfile)
 var LOGV = log.New(ioutil.Discard, "VERBOSE ", log.Lmicroseconds|log.Lshortfile)
-var LOGD = log.New(ioutil.Discard, "DEBUG", log.Lmicroseconds|log.Lshortfile)
+var LOGD = log.New(os.Stdout, "DEBUG", log.Lmicroseconds|log.Lshortfile)
 
 type client struct {
 	connId int             // connection id
