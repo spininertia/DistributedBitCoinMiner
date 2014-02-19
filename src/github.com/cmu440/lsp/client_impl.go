@@ -7,19 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/cmu440/lspnet"
-	"io/ioutil"
-	"log"
-	"os"
 	"time"
 )
-
-const (
-	Bufsize = 1500
-)
-
-var LOGE = log.New(ioutil.Discard, "ERROR", log.Lmicroseconds|log.Lshortfile)
-var LOGV = log.New(ioutil.Discard, "VERBOSE ", log.Lmicroseconds|log.Lshortfile)
-var LOGD = log.New(os.Stdout, "DEBUG", log.Lmicroseconds|log.Lshortfile)
 
 type client struct {
 	connId int             // connection id
@@ -172,7 +161,7 @@ func (c *client) getMinExpectedSeqId() int {
 
 func (c *client) handleReadRequest(request *readRequest) {
 	// first check whether the connection is closed or lost
-	if c.isLost || c.isClosed {
+	if c.isClosed {
 		close(request.response)
 	} else {
 		// TODO recheck
@@ -188,6 +177,10 @@ func (c *client) handleReadRequest(request *readRequest) {
 				delete(c.receivedMsgBuf, msg.SeqNum)
 			}
 		} else {
+			// if lost and no satisfied msg to read
+			if c.isLost {
+				close(request.response)
+			}
 			// enque
 			c.readRequestQueue.PushBack(request)
 		}
@@ -324,7 +317,7 @@ func (c *client) handleEpochEvent() {
 	c.recvMsgLastEpoch = false
 
 	// lost
-	if c.noMsgEpochCount >= c.params.EpochLimit {
+	if !c.isLost && c.noMsgEpochCount >= c.params.EpochLimit {
 		c.isLost = true
 		close(c.shutdownEpochChan) // stop epoch event handler
 		close(c.shutdownNtwkChan)  // stop reading from ntwk
@@ -332,6 +325,12 @@ func (c *client) handleEpochEvent() {
 		// TODO: tricky here, check again!
 		if c.closeRequestQueue.Len() > 0 {
 			c.notifyClose()
+		}
+
+		// if there is pending read request, notify error
+		if c.readRequestQueue.Len() > 0 {
+			request := c.readRequestQueue.Front().Value.(*readRequest)
+			close(request.response)
 		}
 		return
 	}
