@@ -51,7 +51,7 @@ type server struct {
 func NewServer(port int, params *Params) (Server, error) {
 	sv := &server{
 		clients:           make(map[int]*clientHandle),
-		idCounter:         0,
+		idCounter:         1,
 		readRequestQueue:  list.New(),
 		closeRequestQueue: list.New(),
 		readReqChan:       make(chan *serverReadRequest),
@@ -243,6 +243,7 @@ func (s *server) handleWriteRequest(request *serverWriteRequest) {
 			c.sentMsgBuf.Front().Value.(*Message).SeqNum+s.params.WindowSize >
 				dataMsg.SeqNum {
 			s.sendMessage(request.connId, dataMsg)
+			LOGV.Println("Server Send Message:", dataMsg)
 		}
 
 		// add to sent msg buf for later resend
@@ -306,9 +307,11 @@ func (s *server) handleNewMsg(msg *Message, addr *lspnet.UDPAddr) {
 			s.idCounter++
 			s.clients[c.connId] = c
 			s.sendMessage(c.connId, NewAck(c.connId, 0))
+			LOGV.Println("Server Acked Connect")
 		}
 	} else if msg.Type == MsgAck {
 		c := s.clients[msg.ConnID]
+		c.recvMsgLastEpoch = true
 
 		// if lost, ignore all incomming messages
 		if c.isLost {
@@ -341,6 +344,7 @@ func (s *server) handleNewMsg(msg *Message, addr *lspnet.UDPAddr) {
 		}
 	} else if msg.Type == MsgData {
 		c := s.clients[msg.ConnID]
+		c.recvMsgLastEpoch = true
 
 		// ignore lost or closed client
 		if c.isLost || c.isClosed {
@@ -350,8 +354,10 @@ func (s *server) handleNewMsg(msg *Message, addr *lspnet.UDPAddr) {
 		// first check duplication
 		if _, present := c.receivedMsgBuf[msg.SeqNum]; !present &&
 			msg.SeqNum >= c.expectedSeqId {
+
 			// ack this message
 			s.sendMessage(c.connId, NewAck(c.connId, msg.SeqNum))
+			LOGV.Println("Server Ack New Message")
 
 			// add msg to buf
 			c.receivedMsgBuf[msg.SeqNum] = msg
@@ -371,10 +377,12 @@ func (s *server) handleNewMsg(msg *Message, addr *lspnet.UDPAddr) {
 
 			// possibly notify read
 			if s.hasPendingReadRequest() {
+				LOGV.Println("Notify Read")
+				LOGV.Println(c.expectedSeqId, msg)
 				if c.expectedSeqId == msg.SeqNum {
 					request :=
-						s.readRequestQueue.Front().Value.(*serverReadRequest)
-					request.response <- newServerReadResponse(c.connId,
+						s.readRequestQueue.Remove(s.readRequestQueue.Front())
+					request.(*serverReadRequest).response <- newServerReadResponse(c.connId,
 						msg.Payload)
 					c.expectedSeqId++
 				}
