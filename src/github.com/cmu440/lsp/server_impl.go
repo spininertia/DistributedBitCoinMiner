@@ -58,7 +58,7 @@ func NewServer(port int, params *Params) (Server, error) {
 		writeReqChan:      make(chan *serverWriteRequest),
 		closeConnReqChan:  make(chan *closeConnRequest),
 		closeReqChan:      make(chan *closeRequest),
-		msgArriveChan:     make(chan *packet),
+		msgArriveChan:     make(chan *packet, 1),
 		epochChan:         make(chan struct{}),
 		shutdownNtwk:      make(chan struct{}),
 		shutdownAll:       make(chan struct{}),
@@ -318,12 +318,27 @@ func (s *server) handleNewMsg(msg *Message, addr *lspnet.UDPAddr) {
 			return
 		}
 
+		oldWindow := -1
 		flag := false
 		for e := c.sentMsgBuf.Front(); e != nil; e = e.Next() {
 			if msg.SeqNum == e.Value.(*Message).SeqNum {
+				if e == c.sentMsgBuf.Front() {
+					oldWindow = msg.SeqNum + s.params.WindowSize
+				}
 				c.sentMsgBuf.Remove(e)
 				flag = true
 				break
+			}
+		}
+
+		//send pending message, not waiting epoch
+		if oldWindow > 0 && c.sentMsgBuf.Len() > 0 {
+			newWindow := c.sentMsgBuf.Front().Value.(*Message).SeqNum +
+				s.params.WindowSize
+			for e := c.sentMsgBuf.Front(); e != nil; e = e.Next() {
+				if msg.SeqNum >= oldWindow && msg.SeqNum < newWindow {
+					s.sendMessage(c.connId, e.Value.(*Message))
+				}
 			}
 		}
 

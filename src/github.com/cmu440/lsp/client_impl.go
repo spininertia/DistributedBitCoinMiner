@@ -251,10 +251,26 @@ func (c *client) handleNewMsg(msg *Message) {
 		} else {
 			// check against sentMsgBuf
 			// TODO: shall we send pending msgs here? or waiting for epoch
+
+			oldWindow := -1
 			for e := c.sentMsgBuf.Front(); e != nil; e = e.Next() {
 				if msg.SeqNum == e.Value.(*Message).SeqNum {
+					if e == c.sentMsgBuf.Front() {
+						oldWindow = msg.SeqNum + c.params.WindowSize
+					}
 					c.sentMsgBuf.Remove(e)
 					break
+				}
+			}
+
+			//send pending message, not waiting epoch
+			if oldWindow > 0 && c.sentMsgBuf.Len() > 0 {
+				newWindow := c.sentMsgBuf.Front().Value.(*Message).SeqNum +
+					c.params.WindowSize
+				for e := c.sentMsgBuf.Front(); e != nil; e = e.Next() {
+					if msg.SeqNum >= oldWindow && msg.SeqNum < newWindow {
+						c.sendMsg(e.Value.(*Message))
+					}
 				}
 			}
 
