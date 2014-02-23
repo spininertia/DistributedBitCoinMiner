@@ -143,6 +143,70 @@ func (c *client) Close() error {
 }
 
 /*
+ * handlers/goroutines
+ */
+
+// master goroutine, control access to share resources
+func (c *client) masterEventHandler() {
+	defer c.conn.Close()
+	for {
+		select {
+		case request := <-c.readReqChan:
+			c.handleReadRequest(request)
+		case request := <-c.writeReqChan:
+			c.handleWriteRequest(request)
+		case request := <-c.closeReqChan:
+			c.handleCloseRequest(request)
+		case msg := <-c.msgArriveChan:
+			c.handleNewMsg(msg)
+		case <-c.epochChan:
+			c.handleEpochEvent()
+		case <-c.shutdownMasterChan:
+			LOGV.Println("Master Event Handler shutdown!")
+			return
+		}
+	}
+}
+
+// network event handler, listen on port for msgs
+func (c *client) networkEventHandler() {
+	LOGV.Println("Network Event Handler started!")
+
+	var buffer [Bufsize]byte
+
+	for {
+		select {
+		case <-c.shutdownNtwkChan:
+			LOGV.Println("Network EventHandler shutdown!")
+			return
+		default:
+			msg := new(Message)
+			n, err := c.conn.Read(buffer[0:])
+			if err != nil {
+				LOGE.Println(err)
+			}
+			json.Unmarshal(buffer[0:n], msg)
+			c.msgArriveChan <- msg
+		}
+	}
+}
+
+// handles epoch events
+func (c *client) epochHandler() {
+	LOGV.Println("Epoch Handler started!")
+
+	for {
+		select {
+		case <-time.After(time.Duration(c.params.EpochMillis) * time.Millisecond):
+			c.epochChan <- struct{}{}
+		case <-c.shutdownEpochChan:
+			LOGV.Println("Epoch Handler shutdown!")
+			return
+		}
+	}
+}
+
+/*
  * helper functions
  */
 
@@ -407,69 +471,5 @@ func (c *client) notifyRead() {
 			break
 		}
 		e = next
-	}
-}
-
-/*
- * handlers/goroutines
- */
-
-// master goroutine, control access to share resources
-func (c *client) masterEventHandler() {
-	defer c.conn.Close()
-	for {
-		select {
-		case request := <-c.readReqChan:
-			c.handleReadRequest(request)
-		case request := <-c.writeReqChan:
-			c.handleWriteRequest(request)
-		case request := <-c.closeReqChan:
-			c.handleCloseRequest(request)
-		case msg := <-c.msgArriveChan:
-			c.handleNewMsg(msg)
-		case <-c.epochChan:
-			c.handleEpochEvent()
-		case <-c.shutdownMasterChan:
-			LOGV.Println("Master Event Handler shutdown!")
-			return
-		}
-	}
-}
-
-// network event handler, listen on port for msgs
-func (c *client) networkEventHandler() {
-	LOGV.Println("Network Event Handler started!")
-
-	var buffer [Bufsize]byte
-
-	for {
-		select {
-		case <-c.shutdownNtwkChan:
-			LOGV.Println("Network EventHandler shutdown!")
-			return
-		default:
-			msg := new(Message)
-			n, err := c.conn.Read(buffer[0:])
-			if err != nil {
-				LOGE.Println(err)
-			}
-			json.Unmarshal(buffer[0:n], msg)
-			c.msgArriveChan <- msg
-		}
-	}
-}
-
-// handles epoch events
-func (c *client) epochHandler() {
-	LOGV.Println("Epoch Handler started!")
-
-	for {
-		select {
-		case <-time.After(time.Duration(c.params.EpochMillis) * time.Millisecond):
-			c.epochChan <- struct{}{}
-		case <-c.shutdownEpochChan:
-			LOGV.Println("Epoch Handler shutdown!")
-			return
-		}
 	}
 }
