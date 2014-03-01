@@ -20,6 +20,7 @@ func main() {
 	maxNonce := uint64(os.Args[3])
 
 	client := lsp.NewClient(os.Args[1], lsp.NewParams())
+	defer client.Close()
 
 	// write request
 	payload, _ := json.Marshal(bitcoin.NewRequest(message, 0, maxNonce))
