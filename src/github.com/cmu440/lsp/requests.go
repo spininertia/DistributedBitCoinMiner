@@ -76,14 +76,17 @@ func newCloseConnRequest(connId int) *closeConnRequest {
 // }
 
 type serverReadResponse struct {
-	connId  int
-	payload []byte
+	connId    int
+	payload   []byte
+	isSuccess bool
 }
 
-func newServerReadResponse(connId int, payload []byte) *serverReadResponse {
+func newServerReadResponse(connId int, payload []byte,
+	isSuccess bool) *serverReadResponse {
 	return &serverReadResponse{
-		connId:  connId,
-		payload: payload,
+		connId:    connId,
+		payload:   payload,
+		isSuccess: isSuccess,
 	}
 }
 

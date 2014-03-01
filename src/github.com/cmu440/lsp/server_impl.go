@@ -85,9 +85,9 @@ func NewServer(port int, params *Params) (Server, error) {
 func (s *server) Read() (int, []byte, error) {
 	request := newServerReadRequest()
 	s.readReqChan <- request
-	response, ok := <-request.response
-	if !ok {
-		return -1, nil, errors.New("Read failed")
+	response := <-request.response
+	if !response.isSuccess {
+		return response.connId, nil, errors.New("Read failed")
 	}
 	return response.connId, response.payload, nil
 }
@@ -196,13 +196,14 @@ func (s *server) handleReadRequest(request *serverReadRequest) {
 			continue
 		} else if c.isClosed {
 			c.isNotified = true
-			close(request.response)
+			request.response <- newServerReadResponse(c.connId,
+				make([]byte, 0), false)
 			return
 		} else if c.isLost {
 			// if lost but have immediate satisfied message
 			if msg, present := c.receivedMsgBuf[c.expectedSeqId]; present {
 				c.expectedSeqId++
-				response := newServerReadResponse(msg.ConnID, msg.Payload)
+				response := newServerReadResponse(msg.ConnID, msg.Payload, true)
 				request.response <- response
 				if msg.SeqNum <= c.maxReceivedSeqId-s.params.WindowSize {
 					delete(c.receivedMsgBuf, msg.SeqNum)
@@ -210,7 +211,8 @@ func (s *server) handleReadRequest(request *serverReadRequest) {
 			} else {
 				// no satisfied message, notify error
 				c.isNotified = true
-				close(request.response)
+				request.response <- newServerReadResponse(c.connId,
+					make([]byte, 0), false)
 			}
 			// TODO: might also remove the clientHandle
 			return
@@ -218,7 +220,7 @@ func (s *server) handleReadRequest(request *serverReadRequest) {
 			// check whether there is message satisfy the current need
 			if msg, present := c.receivedMsgBuf[c.expectedSeqId]; present {
 				c.expectedSeqId++
-				response := newServerReadResponse(msg.ConnID, msg.Payload)
+				response := newServerReadResponse(msg.ConnID, msg.Payload, true)
 				request.response <- response
 				if msg.SeqNum <= c.maxReceivedSeqId-s.params.WindowSize {
 					delete(c.receivedMsgBuf, msg.SeqNum)
@@ -403,7 +405,7 @@ func (s *server) handleNewMsg(msg *Message, addr *lspnet.UDPAddr) {
 					request :=
 						s.readRequestQueue.Remove(s.readRequestQueue.Front())
 					request.(*serverReadRequest).response <- newServerReadResponse(c.connId,
-						msg.Payload)
+						msg.Payload, true)
 					c.expectedSeqId++
 				}
 			}
@@ -442,7 +444,10 @@ func (s *server) handleEpochEvent() {
 				if s.hasPendingReadRequest() {
 					c.isNotified = true
 					request := s.readRequestQueue.Remove(s.readRequestQueue.Front())
-					close(request.(*serverReadRequest).response)
+					// close(request.(*serverReadRequest).response)
+					request.(*serverReadRequest).response <- newServerReadResponse(c.connId,
+						make([]byte, 0), false)
+
 				}
 			}
 
