@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"github.com/cmu440/bitcoin"
 	"github.com/cmu440/lsp"
+	"log"
 	"os"
 )
+
+var LOGV = log.New(os.Stdout, "VERBOSE ", log.Lmicroseconds|log.Lshortfile)
 
 func main() {
 	const numArgs = 2
@@ -17,10 +20,10 @@ func main() {
 
 	hostport := os.Args[1]
 
-	miner := lsp.NewClient(hostport, lsp.NewParams())
+	miner, _ := lsp.NewClient(hostport, lsp.NewParams())
 	defer miner.Close()
 
-	joinReq := json.Marshal(bitcoin.NewJoin())
+	joinReq, _ := json.Marshal(bitcoin.NewJoin())
 	miner.Write(joinReq)
 
 	msg := new(bitcoin.Message)
@@ -30,10 +33,12 @@ func main() {
 			break
 		}
 		json.Unmarshal(payload, msg)
-
+		LOGV.Println("recevied new request", msg)
 		// mining
 		minHash, nonce := mine(msg.Data, msg.Lower, msg.Upper)
-		err = miner.Write(bitcoin.NewResult(minHash, nonce))
+
+		result, _ := json.Marshal(bitcoin.NewResult(minHash, nonce))
+		err = miner.Write(result)
 
 		if err != nil {
 			break
@@ -42,7 +47,7 @@ func main() {
 
 }
 
-func mine(data string, lower, upper int) (uint64, uint64) {
+func mine(data string, lower, upper uint64) (uint64, uint64) {
 	minHash := ^uint64(0)
 	var nonce uint64
 

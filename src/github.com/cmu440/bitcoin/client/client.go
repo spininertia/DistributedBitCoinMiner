@@ -6,6 +6,7 @@ import (
 	"github.com/cmu440/bitcoin"
 	"github.com/cmu440/lsp"
 	"os"
+	"strconv"
 )
 
 func main() {
@@ -17,14 +18,17 @@ func main() {
 
 	hostport := os.Args[1]
 	message := os.Args[2]
-	maxNonce := uint64(os.Args[3])
-
-	client := lsp.NewClient(os.Args[1], lsp.NewParams())
+	maxNonce, _ := strconv.ParseUint(os.Args[3], 10, 64)
+	client, _ := lsp.NewClient(hostport, lsp.NewParams())
 	defer client.Close()
 
 	// write request
 	payload, _ := json.Marshal(bitcoin.NewRequest(message, 0, maxNonce))
-	client.Write(payload)
+
+	if err := client.Write(payload); err != nil {
+		printDisconnected()
+		return
+	}
 
 	// read response
 	response, err := client.Read()
@@ -33,7 +37,8 @@ func main() {
 	} else {
 		result := new(bitcoin.Message)
 		json.Unmarshal(response, result)
-		printResult(result.Hash, result.Nonce)
+		printResult(strconv.FormatUint(result.Hash, 10),
+			strconv.FormatUint(result.Nonce, 10))
 	}
 }
 
