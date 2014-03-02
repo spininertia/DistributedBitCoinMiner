@@ -34,6 +34,13 @@ func newTask(jobId int, lower, upper uint64) *Task {
 	}
 }
 
+// for each client request, a job is created
+// according to the request nonce range, the job is divided to small tasks
+// each task is assigned to a single miner
+// scheduling is according to first come first serve principle
+// this might ve problemetic when request with large nonce comes first
+// while subsequent request only has small nonce
+
 type Job struct {
 	jobId int    // job Id, also the client connId
 	data  string // request data field
